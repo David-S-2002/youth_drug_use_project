@@ -1,0 +1,258 @@
+---
+title: "Youth Drug Use Modeling"
+author: "David Stanko"
+date: "2025-04-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Read in the dataset
+
+```{r}
+youth.data <- read.csv("youth_data_clean.csv", stringsAsFactors=TRUE)
+youth.data
+```
+
+## Make a dataset of the predictors and response for each model. Split each dataset into a training and test set.
+
+```{r}
+set.seed(1)
+
+test.indices <- sample(x=nrow(youth.data), size = 0.25 * nrow(youth.data), replace=FALSE)
+
+# Dataset for the first model
+youth.data.1 <- data.frame(youth.data[, 1:6])
+youth.data.1$first_marij_use_age <- youth.data[, 8]
+
+# train/test split for the first model
+youth.train.1 <- youth.data.1[-test.indices,]
+youth.test.1 <- youth.data.1[test.indices,]
+
+# Dataset for the second model
+youth.data.2 <- data.frame(youth.data[, 1:7])
+
+youth.train.2 <- youth.data.2[-test.indices,]
+youth.test.2 <- youth.data.2[test.indices,]
+
+# Dataset for the third model
+youth.data.3 <- data.frame(youth.data[, 1:6])
+youth.data.3$tobacco_age_class <- youth.data[, 9]
+
+youth.train.3 <- youth.data.3[-test.indices,]
+youth.test.3 <- youth.data.3[test.indices,]
+
+# Dataset for the fourth model
+youth.data.4 <- data.frame(youth.data[, 1:6])
+youth.data.4$cig_age_class <- youth.data[, 10]
+
+youth.train.4 <- youth.data.4[-test.indices,]
+youth.test.4 <- youth.data.4[test.indices,]
+```
+
+## Use a decision tree to predict the age that a youth first uses marijuana (regression)
+
+```{r}
+library(tree)
+
+# Tree predicting the age first used marijuana from everything else
+tree.marij.age <- tree(first_marij_use_age ~ ., youth.train.1)
+
+summary(tree.marij.age)
+```
+
+```{r}
+# Perform cross-validation for the level of tree fomplexity
+set.seed(1)
+
+cv.marij.age <- cv.tree(tree.marij.age)
+cv.marij.age
+```
+
+```{r}
+plot(cv.marij.age$size, cv.marij.age$dev, type = "b")
+```
+
+The tree with the lowest cross-validation error is the most complex tree, with 6 terminal nodes. The decision tree we created already has 6 terminal nodes, so we don't need to prune it.
+
+Now let's plot that tree:
+```{r}
+plot(tree.marij.age)
+text(tree.marij.age, pretty = 0)
+```
+
+The most important indicator of the age marijuana is first used, is the number of days marijuana was used in the past year, since that's the first node in the decision tree. 
+
+On the left side of the tree, we see that, if a youth did not use marijuana at all this year, the predicted age of first marijuana use is 13.39. If a youth used marijuana for at least one day in the past year but at most 4 days, the predicted age of first use is 15.08. If a youth used marijuana for at least 5 days but fewer than 199 days, the predicted age is 13.88. 
+
+I was expecting that an increase in `num_marij_days_past_year` would cause either an increase or a decrease in the predicted age. Instead, on the left side of the tree (under 199 days of marijuana use), the predicted age starts at 13, then jumps up to 15, then goes back down to 13.
+
+Now, on the right side, if the youth has used marijuana for at least 199 days in the past year, we look at the number of days they have used marijuana in the past month. These youth always have a lower first marijuana use age, even if it's just slightly. If the number of marijuana use days per month is less than 30 (which is the highest possible value), then we predict an age of 13.13. If marijuana was used for all 30 days this month, however, we now look at the number of days the youth used alcohol this past year. If the youth has used alcohol for less than 50 days this year, we predict a first marijuana use age of 12.83, which is even lower. If the youth has used alcohol for at least 50 days, we predict a first marijuana use age of 11.00, which is drastically lower.
+
+So, in summary, the model tells us that youth with a higher yearly marijuana use frequency have started using marijuana at earlier ages. The predicted age gets younger if the youth has used marijuana every day this month, and then gets younger again if they have used alcohol for at least 50 days this year. So, youth who use more yearly and monthly marijuana, and more alcohol, are predicted to have started using marijuana at younger ages. Youth who have used marijuana for 1-4 days this year, are predicted to have started using marijuana at the oldest age.
+
+```{r}
+marij.age.pred <- predict(tree.marij.age, newdata = youth.test.1) # Predicted age of first marijuana use in the test set
+marij.age.test <- youth.test.1$first_marij_use_age # Actual age of first marijuana use in the test set
+test.rmse <- sqrt( mean((marij.age.pred - marij.age.test)^2) ) # Take RMSE since it's in the same units as the response
+test.rmse
+```
+
+The test RMSE for the regression tree is 1.81. So, on average, this model makes predictions that are within 1.81 years of the true age.
+
+## Use bagging to predict the age of first alcohol use (regression)
+
+```{r}
+library(randomForest)
+set.seed(1)
+
+num.predictors <- ncol(youth.train.2) - 1 # Number of predictors in the dataset
+
+bag.alc.age <- randomForest(first_alc_use_age ~ ., data = youth.train.2, mtry = num.predictors, importance = TRUE)
+bag.alc.age
+```
+
+Before we compute the test RMSE, let's find a suitable number of trees by plotting the number of trees vs. the error. 
+
+```{r}
+plot(1:500, bag.alc.age$mse, type="o", xlab="Number of trees", ylab="MSE", cex=.2, lwd=1)
+```
+The error starts plateauing at about 100 trees. So, 100 trees is sufficient, and we don't need 500. Let's make a new bagged model with 100 trees:
+
+```{r}
+set.seed(1)
+
+bag.alc.age <- randomForest(first_alc_use_age ~ ., data = youth.train.2, mtry = num.predictors, importance = TRUE, ntree=100)
+bag.alc.age
+```
+
+Now we'll compute the test RMSE:
+
+```{r}
+alc.age.pred <- predict(bag.alc.age, newdata = youth.test.2)
+alc.age.test <- youth.test.2$first_alc_use_age
+
+test.rmse <- sqrt( mean((alc.age.pred - alc.age.test)^2) ) # Take RMSE since it's in the same units as the response
+test.rmse
+```
+
+The test RMSE is 2.49, which means that, on average, this model makes predictions that are within 2.49 years of the true age that a youth started using alcohol. This is significantly worse than the test RMSE for the decision tree predicting the age of first marijuana use.
+
+Now let's look at variable importance: 
+
+```{r}
+importance(bag.alc.age)
+```
+
+```{r}
+varImpPlot(bag.alc.age)
+```
+
+The number of days of alcohol use this year and the number of days of marijuana use this year are the most important variables. This indicates that yearly drug use is more important than monthly drug use when predicting the age at which a person will start using alcohol. And, surprisingly, the monthly frequency of cigarette and tobacco use is more important than the monthly frequency of alcohol use.
+
+
+
+## Use a random forest to predict whether youth started using tobacco: 1. under 12 years old or 2. 12 and up, *or* never used tobacco
+
+```{r}
+rf.tob.age <- randomForest(tobacco_age_class ~ ., data = youth.train.3, importance = TRUE)
+rf.tob.age
+```
+
+```{r}
+summary(youth.train.3$tobacco_age_class)
+```
+
+There is a class imbalance in the training data: 877 youth are in the "12+ or never used" class, and only 8 youth are in the "Under 12" class. That explains the confusion matrix: All 877 youth in the "12+ or never used" class were classified correctly, while all the youth in the other class were classified incorrectly.
+
+
+Now get the test error:
+
+```{r}
+tob.age.pred <- predict(rf.tob.age, newdata = youth.test.3, type="class")
+tob.age.test <- youth.test.3$tobacco_age_class
+
+table(tob.age.pred, tob.age.test)
+```
+```{r}
+summary(tob.age.test)
+```
+
+There is class imbalance in the test set too, and all the "Under 12" observations are misclassified.
+
+
+## Use random forest to predict in which age group youth started using cigarettes
+
+```{r}
+library(gbm)
+youth.train.4
+```
+
+```{r}
+set.seed(1)
+
+rf.cig.age <- randomForest(cig_age_class ~ ., data = youth.train.4, importance = TRUE)
+rf.cig.age
+```
+
+```{r}
+summary(youth.train.4$cig_age_class)
+```
+
+There is also a class imbalance in this data, but it's not as severe as for the previous problem. However, in the training set, only 5 youth in the "12-13" class and 5 youth in the "Under 12" class were classified correctly, respectively. On the training data, the random forest classifies "Never used" the best, which makes sense because that's the majority class. It classifies "14-17" the second-best, and that's the class with the second-highest number of observations. It classifies the other two classes very poorly, and those two have the fewest observations.
+
+Now let's get the classification error on the test set:
+```{r}
+summary(youth.test.4$cig_age_class)
+```
+
+
+```{r}
+cig.age.class.pred <- predict(rf.cig.age, youth.test.4)
+cig.age.class.test <- youth.test.4$cig_age_class
+
+table(cig.age.class.pred, cig.age.class.test) # confusion matrix
+```
+For the test set, the random forest classifies "Never used" very well, "14-17" the second-best (but rather poorly), and it predicts the other two classes very poorly. The distribution of classes in the test set is as unbalanced as in the training set.
+
+```{r}
+importance(rf.cig.age)
+```
+
+```{r}
+varImpPlot(rf.cig.age)
+```
+
+One important variable for predicting the age category of first cigarette use are `num_cig_days_past_month`, which means age of first cigarette use is highly dependent on current monthly cigarette use. The number of days a youth used marijuana or alcohol in the past year are also important. This tells us that age of first cigarette use has a strong relationship with many of the current drug use variables. 
+
+
+## Boosting to predict cigarette use age category
+
+
+```{r}
+boost.cig.age <- gbm(cig_age_class ~ ., data = youth.train.4, n.trees=1000, shrinkage=0.01, interaction.depth=4)
+summary(boost.cig.age)
+```
+
+```{r}
+boost.cig.age
+```
+
+
+
+```{r}
+pred <- predict(boost.cig.age, newdata = youth.test.4, type="link") 
+pred
+```
+
+
+
+
+
+
+
+
+
+
