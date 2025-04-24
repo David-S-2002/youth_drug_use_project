@@ -1,6 +1,6 @@
 # youth_drug_use_project
 
-This project uses tree-based machine learning methods to analyze youth drug use. The dataset on youth drug use that I'm using is survey data from the National Survey on Drug Use and Health. The specific research question I will investigate is "What is the relationship between age of first drug use and current drug use?”
+This project uses tree-based machine learning methods to analyze youth drug use. The dataset on youth drug use that I'm using is survey data from [the National Survey on Drug Use and Health](https://www.samhsa.gov/data/data-we-collect/nsduh-national-survey-drug-use-and-health/datafiles/2020). The specific research question I will investigate is "What is the relationship between age of first drug use and current drug use?”
 
 ## File descriptions
 - `data_cleaning.ipynb`: cleans the original data before using it for modeling
