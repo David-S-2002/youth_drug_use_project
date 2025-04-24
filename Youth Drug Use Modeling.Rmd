@@ -13,7 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 youth.data <- read.csv("youth_data_clean.csv", stringsAsFactors=TRUE)
-youth.data
+head(youth.data)
 ```
 
 ## Make a dataset of the predictors and response for each model. Split each dataset into a training and test set.
@@ -23,7 +23,7 @@ set.seed(1)
 
 test.indices <- sample(x=nrow(youth.data), size = 0.25 * nrow(youth.data), replace=FALSE)
 
-# Dataset for the first model
+# Dataset for the first model (age of first marijuana use)
 youth.data.1 <- data.frame(youth.data[, 1:6])
 youth.data.1$first_marij_use_age <- youth.data[, 8]
 
@@ -37,20 +37,21 @@ youth.data.2 <- data.frame(youth.data[, 1:7])
 youth.train.2 <- youth.data.2[-test.indices,]
 youth.test.2 <- youth.data.2[test.indices,]
 
-# Dataset for the third model
+# Dataset for the third model (age of first tobacco use)
 youth.data.3 <- data.frame(youth.data[, 1:6])
 youth.data.3$tobacco_age_class <- youth.data[, 9]
 
 youth.train.3 <- youth.data.3[-test.indices,]
 youth.test.3 <- youth.data.3[test.indices,]
 
-# Dataset for the fourth model
+# Dataset for the fourth model (age of first cigarette use)
 youth.data.4 <- data.frame(youth.data[, 1:6])
 youth.data.4$cig_age_class <- youth.data[, 10]
 
 youth.train.4 <- youth.data.4[-test.indices,]
 youth.test.4 <- youth.data.4[test.indices,]
 ```
+
 
 ## Use a decision tree to predict the age that a youth first uses marijuana (regression)
 
@@ -64,7 +65,7 @@ summary(tree.marij.age)
 ```
 
 ```{r}
-# Perform cross-validation for the level of tree fomplexity
+# Perform cross-validation for the level of tree complexity
 set.seed(1)
 
 cv.marij.age <- cv.tree(tree.marij.age)
@@ -72,7 +73,7 @@ cv.marij.age
 ```
 
 ```{r}
-plot(cv.marij.age$size, cv.marij.age$dev, type = "b")
+plot(cv.marij.age$size, cv.marij.age$dev, type = "b", xlab = "Tree Size", ylab = "Deviance", main = "Cross-Validation: Deviance vs. Tree Size")
 ```
 
 The tree with the lowest cross-validation error is the most complex tree, with 6 terminal nodes. The decision tree we created already has 6 terminal nodes, so we don't need to prune it.
@@ -117,7 +118,7 @@ bag.alc.age
 Before we compute the test RMSE, let's find a suitable number of trees by plotting the number of trees vs. the error. 
 
 ```{r}
-plot(1:500, bag.alc.age$mse, type="o", xlab="Number of trees", ylab="MSE", cex=.2, lwd=1)
+plot(1:500, bag.alc.age$mse, type="o", xlab="Number of trees", ylab="OOB Classification Error", main = "OOB Error vs. Number of Trees", cex=.2, lwd=1)
 ```
 The error starts plateauing at about 100 trees. So, 100 trees is sufficient, and we don't need 500. Let's make a new bagged model with 100 trees:
 
@@ -147,112 +148,239 @@ importance(bag.alc.age)
 ```
 
 ```{r}
-varImpPlot(bag.alc.age)
+varImpPlot(bag.alc.age, main = "Variable Importance Plot for Bagging", pt.cex = 2, bg = "red")
 ```
 
-The number of days of alcohol use this year and the number of days of marijuana use this year are the most important variables. This indicates that yearly drug use is more important than monthly drug use when predicting the age at which a person will start using alcohol. And, surprisingly, the monthly frequency of cigarette and tobacco use is more important than the monthly frequency of alcohol use.
+The number of days of alcohol use this year and the number of days of marijuana use this year are the most important variables. This indicates that yearly drug use is more important than monthly drug use when predicting the age at which a person will start using alcohol. So, long-term drug use trends are more important than short-term trends. 
 
 
 
-## Use a random forest to predict whether youth started using tobacco: 1. under 12 years old or 2. 12 and up, *or* never used tobacco
+## Use boosting to predict whether youth started using tobacco: 1. under 12 years old or 2. 12 and up, *or* never used tobacco
+
+Below, we create a boosting model, while using the caret package to tune all the parameters for boosting.
 
 ```{r}
-rf.tob.age <- randomForest(tobacco_age_class ~ ., data = youth.train.3, importance = TRUE)
-rf.tob.age
+library(caret)
+
+set.seed(1)
+
+# Specify that we will do 10-fold CV for parameter tuning
+train.control <- trainControl(method = "cv", number = 10)
+
+# Grid of values for the parameters
+grid <- expand.grid(interaction.depth = c(1, 2, 3, 4),
+                    n.trees = c(10, 50, 100, 500, 1000),
+                    shrinkage = c(0.001, 0.01, 0.1),
+                    n.minobsinnode = 10)
+
+# Do cross-validation
+cv.out <- train(tobacco_age_class ~ ., 
+                data = youth.train.3,
+                method = "gbm",
+                trControl = train.control,
+                distribution = "bernoulli",
+                verbose = FALSE,
+                tuneGrid = grid)
 ```
+
+```{r}
+cv.out$bestTune # Get the chosen parameters
+```
+
+The chosen set of parameters is `n.trees = 10`, `interaction.depth = 1`, and `shrinkage = 0.001`.
+
+```{r}
+# Get the boosting model
+boost.tob.age <- cv.out$finalModel
+```
+
+
+### Model evaluation
+
+First let's look at the class distribution in the training and test sets:
 
 ```{r}
 summary(youth.train.3$tobacco_age_class)
 ```
 
-There is a class imbalance in the training data: 877 youth are in the "12+ or never used" class, and only 8 youth are in the "Under 12" class. That explains the confusion matrix: All 877 youth in the "12+ or never used" class were classified correctly, while all the youth in the other class were classified incorrectly.
-
-
-Now get the test error:
-
 ```{r}
-tob.age.pred <- predict(rf.tob.age, newdata = youth.test.3, type="class")
-tob.age.test <- youth.test.3$tobacco_age_class
-
-table(tob.age.pred, tob.age.test)
-```
-```{r}
-summary(tob.age.test)
+summary(youth.test.3$tobacco_age_class)
 ```
 
-There is class imbalance in the test set too, and all the "Under 12" observations are misclassified.
-
-
-## Use random forest to predict in which age group youth started using cigarettes
+The data is very imbalanced. In the training data, we have 877 samples in the "12+ or never used" class and only 8 in the "Under 12" class. 
 
 ```{r}
-library(gbm)
-youth.train.4
+tob.age.class.test <- youth.test.3$tobacco_age_class
+
+# Need to convert the class labels in the test set to 0/1 to avoid errors
+youth.test.3$tobacco_age_class <- ifelse(youth.test.3$tobacco_age_class == "Under 12", yes = 0, no = 1)
+
+tob.pred.probs <- predict(boost.tob.age, youth.test.3, type = "response") # Predicted probabilities
+tob.age.class.pred <- ifelse(tob.pred.probs > 0.5, yes = "12+ or never used", no = "Under 12") # Convert these to class labels
+
+table(Predicted = tob.age.class.pred, Actual = tob.age.class.test) # confusion matrix
 ```
+
+```{r}
+# Overall prediction accuracy
+overall.acc <- 291/nrow(youth.test.3)
+overall.acc
+```
+
+The confusion matrix indicates that all the samples in the test set were predicted as "12+ or never used". None at all were predicted as "Under 12". So, the class imbalance problem is especially severe here. This model performs very, very badly. It makes sense that the classifier is suffering from the class imbalance problem, since the training set was highly imbalanced. The test accuracy across all classes is approximately 99.0%. But that's not a meaningful number at all because no samples in the minority class are classified correctly. In fact, this means we can't calculate the accuracy for the minority class. If we passed in more samples from the minority class for test data, most of those would probably be misclassified as well. 
+
+I cannot directly compare this model with the previous ones, because those were for regression and this one was for classification. However, those performed reasonably well and this model performs very, very badly. I would be able to rely on insights those models, but definitely not this one.
+
+
+### Relative influence
+
+```{r}
+summary(boost.tob.age)
+```
+
+4 of the 6 predictors used have a relative influence of exactly 0. So, those 4 variables are not important at all for predicting the age that a youth first used tobacco. The only variable that's *very* important (with a relative influence of 96.8) is the number of days a youth has used alcohol in the past month. The other variable with nonzero relative influence is the number of days a youth used alcohol in the past year. But `num_alc_days_past_year` has a relative influence of only 3.2, which is tiny compared to the relative influence of  `num_alc_days_past_month`. So, essentially, `num_alc_days_past_month` is the only important variable for predicting the age of first tobacco use.
+
+This is surprising because I thought that the age of first tobacco use would be highly correlated with *current* tobacco use. But the opposite is true: current tobacco use is not important *at all* for predicting the age of first use.
+
+However, this model performs very badly because it suffers heavily from the class imbalance problem. So, we cannot really trust this model for saying anything useful about the data. Perhaps we would have different relative influences if the classes were more balanced.
+
+
+### Partial dependence plots
+
+```{r}
+plot(boost.tob.age, i = "num_alc_days_past_month", type = "response", xlab = "Days Used Alcohol This Month", ylab = "Probability of '12+ or Never Used' Class", main = "Partial Dependence Plot: Alcohol Use This Month")
+```
+
+Above, the y-axis represents the *probability* that the class label is "12+ or never used". If the probability is greater than 0.5, then "12+ or never used" is the predicted class. The plot shows that all the predicted probabilities are very high, at least 99%. That agrees with our model results, where the class imbalance was so high that the model only predicted "12+ or never used" for the entire test set. If the model only predicts one class, it makes sense that that class would have a very high probability. So, even though the monthly alcohol frequency is the only important variable, this plot is not really telling us anything because all the probabilities are very high. It's only saying "We predict '12+ or never used' every time, with almost complete certainty".
+
+But let's try to interpret the plot anyway. If we are paying attention to *very small* changes, then the probability of "12+ or never used" decreases as the alcohol use increases. So, youth who are more likely to have first used tobacco under age 12, currently use alcohol more. There is a sharp decrease in probability at approximately 7 days of alcohol use, and there is another sharp decrease at approximately 9 days of alcohol use. Thus, youth who use alcohol for 7 or less days a month, are more likely to have first used tobacco above age 12 *or* to have never used tobacco. Youth who use alcohol for 9 or more days a month, are more likely to have first used tobacco under 12. So, youth who use more alcohol now (monthly) are more likely to have started using tobacco at younger ages. However, the plot shows a change in probability of 0.001 at most. So, these effects are so small that they are basically nonexistent.
+
+```{r}
+plot(boost.tob.age, i = "num_alc_days_past_year", type = "response", xlab = "Days Used Alcohol This Year", ylab = "Probability of '12+ or Never Used' Class", main = "Partial Dependence Plot: Alcohol Use This Year")
+```
+
+Again, the y-axis represents the probability that the class label is "12+ or never used". Again, all the predicted probabilities are above 99%, and that agrees with the bad model results. This time, the change in probability across the entire plot is even smaller: it's 4 x 10^(-5). So, the effects of the yearly alcohol use variable are even less significant than the monthly one! That makes sense because the relative influence of this variable was very small compared to the monthly alcohol use variable. So, this plot is meaningless as well.
+
+Still, let's interpret the plot as if the changes in probability were meaningful. There is a sharp decrease at about 100 days of alcohol use. So, youth who use more than 100 days of alcohol a year, are more likely to have started using tobacco at earlier ages. 
+
+If both plots were meaningful, then youth who use more alcohol right now, are more likely to have a younger first age of tobacco use. And monthly alcohol use causes a greater potential change in predictions than yearly alcohol use. However, both of these "changes" are basically nonexistent.
+
+
+## Use a random forest to predict the age group in which youth started using cigarettes
+
+We have a categorical variable for the age group that a youth was in when they started using cigarettes. The categories are "Under 12", "12-13", "14-17", and "Never used". So, this is a multiclass classification problem.
 
 ```{r}
 set.seed(1)
 
 rf.cig.age <- randomForest(cig_age_class ~ ., data = youth.train.4, importance = TRUE)
+```
+
+### Find the appropriate number of trees:
+
+```{r}
+# These are the first 10 training error rates, and the ith element is "the (OOB) error rate for all trees up to the i-th" (R Documentation)
+rf.cig.age$err.rate[1:10,]
+```
+
+```{r}
+rf.cig.age$err.rate[1:10,1] # These are the first 10 OOB error rate for all the classes
+```
+
+```{r}
+plot(1:500, rf.cig.age$err.rate[,1], type="o", xlab="Number of trees", ylab="OOB Classification Error Rate", main = "OOB Error Rate vs. Number of Trees", cex=.2, lwd=1)
+```
+
+The training error generally plateaus at about 250 trees. The error does slightly fluctuate up and down after it plateaus, but those fluctuations are small, and the general trend is a plateau after approximately 250 trees. So, we will use a random forest with 250 trees.
+
+### Find the best number of predictors
+
+We will tune `mtry`, the number of predictors that can be considered in each decision tree split.
+
+```{r}
+# Use the tuneRF() function to do cross-validation for the number of predictors used in each split
+set.seed(1)
+
+y.train.4 <- youth.train.4$cig_age_class # The response variable
+x.train.4 <- youth.train.4[, 1:6]        # The matrix of predictors
+
+# Use 250 trees. Return a matrix containing the mtry values and the corresponding OOB error
+tune.out <- tuneRF(x = x.train.4, y = y.train.4, ntreeTry = 250, trace = TRUE, plot = TRUE, doBest=FALSE)
+```
+```{r}
+tune.out
+```
+
+Using `mtry = 1` (one predictor considered at each split) gives the best OOB error. 
+
+### Create and evaluate the model
+
+Now let's create a model with the tuning parameters we found and use it to get the classification error on the training and test set:
+
+```{r}
+set.seed(1)
+
+rf.cig.age <- randomForest(cig_age_class ~ ., data = youth.train.4, ntree=250, mtry=1, importance = TRUE)
 rf.cig.age
 ```
+Let's look at the class distribution of the training data:
 
 ```{r}
-summary(youth.train.4$cig_age_class)
+summary(youth.train.4$cig_age_class) 
 ```
 
-There is also a class imbalance in this data, but it's not as severe as for the previous problem. However, in the training set, only 5 youth in the "12-13" class and 5 youth in the "Under 12" class were classified correctly, respectively. On the training data, the random forest classifies "Never used" the best, which makes sense because that's the majority class. It classifies "14-17" the second-best, and that's the class with the second-highest number of observations. It classifies the other two classes very poorly, and those two have the fewest observations.
+There is also a class imbalance in this data, but it's not as severe as for the tobacco classification problem. Most youth have never used cigarettes. Of those who have used cigarettes, most youth started using them at age 14-17. A smaller number of youth started using them at 12-13, and the smallest number of youth started using them under 12.
 
-Now let's get the classification error on the test set:
+In the training set, only 1 youth in the "12-13" class and 1 youth in the "Under 12" class were classified correctly, respectively. On the training data, the random forest classifies "Never used" the best, which makes sense because that's the majority class. It classifies "14-17" the second-best, and it classifies the other classes very poorly. That's exactly consistent with the class distribution in the training set.
+
+The OOB error is very high, 36.16%. That is probably because the class imbalance here is less severe than the class imbalance for tobacco use. But also, this model still predicts the majority class much more accurately than the other classes. So, if the other classes have *more* samples but are being predicted *incorrectly*, that would cause the classification error to be high.
+
+Let's look at the class distribution in the test set: 
+
 ```{r}
-summary(youth.test.4$cig_age_class)
+summary(youth.test.4$cig_age_class) 
 ```
 
+The distribution of classes in the test set is as unbalanced as in the training set.
 
 ```{r}
 cig.age.class.pred <- predict(rf.cig.age, youth.test.4)
 cig.age.class.test <- youth.test.4$cig_age_class
 
-table(cig.age.class.pred, cig.age.class.test) # confusion matrix
+table(Predicted = cig.age.class.pred, Actual = cig.age.class.test) # confusion matrix
 ```
-For the test set, the random forest classifies "Never used" very well, "14-17" the second-best (but rather poorly), and it predicts the other two classes very poorly. The distribution of classes in the test set is as unbalanced as in the training set.
+
+```{r}
+accuracy.14.17 <- 17/62 # Find the test accuracy for the 14-17 class
+accuracy.14.17
+```
+
+```{r}
+overall.acc <- (17+172)/nrow(youth.test.4)
+overall.acc
+```
+
+For the test set, the random forest classifies "Never used" 100% accurately. However, it has 0% accuracy for "12-13" and "Under 12". The "14-17" class is predicted with 27.4% accuracy. Many of the observations that are not in "Never used" are predicted as "Never used", which makes sense because that's the majority class. Like the model for tobacco use, this is a bad, unreliable model because the class imbalance caused bias toward the majority class. This model even predicted the smallest two classes with 0% accuracy, similarly to the boosting model. 
+
+The accuracy across all the classes is 64.2%. That indicates that, even though we predict "Never used" perfectly, the inaccurate predictions for all the other classes contribute a lot to the overall classification error. This makes sense because the classes are not as imbalanced as in the last problem. 
+
+Unlike the model for tobacco, this model predicts all 4 classes at least sometimes. The other model *only* predicted the majority class for every test sample, and never the minority class. So, at least the accuracy per each class is a metric that exists for this model, unlike that one. That makes this model an improvement from the model for tobacco. However, "improvement" is not saying much because both models perform very badly. Also, this model predicts one of the non-majority classes ("14-17") with 27% accuracy. That's much better than the tobacco model, which couldn't predict the minority class at all. The reason this model performs better is that the class imbalance is less severe. 
+
+Note that, although there are parallels between the two models, we cannot quite directly compare a binary classification model with a multiclass one. I cannot directly compare this classification model with the regression ones either. But, again, the regression models performed fairly well and this one performs very badly. I would trust those models, but not this one.
+
+
+### Variable importance
 
 ```{r}
 importance(rf.cig.age)
 ```
 
 ```{r}
-varImpPlot(rf.cig.age)
+varImpPlot(rf.cig.age, main = "Random Forest: Variable Importance Plot", pt.cex = 2, bg = "red")
 ```
 
-One important variable for predicting the age category of first cigarette use are `num_cig_days_past_month`, which means age of first cigarette use is highly dependent on current monthly cigarette use. The number of days a youth used marijuana or alcohol in the past year are also important. This tells us that age of first cigarette use has a strong relationship with many of the current drug use variables. 
+The most important variable, by a lot, is `num_cig_days_past_month`. So, age of first cigarette use is highly dependent on current monthly cigarette use. There is a strong relationship between age of first cigarette use and current cigarette  use. Also, the mean decrease in accuracy for `num_cig_days_past_month` is 29.7%, which is much higher than the mean decrease in accuracy for the other variables. So, using only mean decrease in accuracy as a measure, current monthly cigarette use is way more impactful than the other variables for predicting the age of first cigarette use.
 
+The second most important variable, by both metrics, is the number of days the youth has used marijuana in the past year. So, there is also a strong relationship between age of first cigarette use and current marijuana use.
 
-## Boosting to predict cigarette use age category
-
-
-```{r}
-boost.cig.age <- gbm(cig_age_class ~ ., data = youth.train.4, n.trees=1000, shrinkage=0.01, interaction.depth=4)
-summary(boost.cig.age)
-```
-
-```{r}
-boost.cig.age
-```
-
-
-
-```{r}
-pred <- predict(boost.cig.age, newdata = youth.test.4, type="link") 
-pred
-```
-
-
-
-
-
-
-
-
-
-
+However, we cannot truly rely on any insights from this model. It's unreliable because of class imbalance, and if the classes were more balanced, perhaps the variable importance results would be different. 
